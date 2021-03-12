@@ -14,15 +14,15 @@ import math
 from sklearn.neighbors import NearestNeighbors, KNeighborsClassifier
 from sklearn.cluster import KMeans
 import argparse
-import evaluation
+import evaluation_utils as ev
 
 PARSER = argparse.ArgumentParser()
 PARSER.add_argument('-d', '--dataset', default=None, required=True, help="dataset to run")
-PARSER.add_argument('-m', '--models', default="sample_model", required=False, help="dataset to run")
+PARSER.add_argument('-m', '--model', default="sample_model", required=False, help="model to run")
 ARGS = PARSER.parse_args()
 
 DATA = ARGS.dataset
-MODELS_PATH = ARGS.models
+MODELS_PATH = ARGS.model
 
 ENCODER = tf.keras.models.load_model(os.path.join(MODELS_PATH, DATA, "encoder"))
 DECODER = tf.keras.models.load_model(os.path.join(MODELS_PATH, DATA, "decoder"))
@@ -69,10 +69,10 @@ def clustering(x):
     return CLUSTERING.predict(x)
 
 if __name__ == "__main__":
-    recon = evaluation.evaluate_reconstruction(X_TEST, encoder, decoder)
-    dist = evaluation.evaluate_distance(X_TEST, encoder, distance_collection)
-    common = evaluation.evaluate_common_nn(X_TRAIN, X_TEST, encoder, distance_timeseries, N_NEIGHBORS)
-    ri = evaluation.evaluate_clustering_ri(X_TRAIN, X_TEST, encoder, clustering, N_CLUSTERS)
+    recon = ev.evaluate_reconstruction(X_TEST, encoder, decoder)
+    dist = ev.evaluate_distance(X_TEST, encoder, distance_collection)
+    common = ev.evaluate_common_nn(X_TRAIN, X_TEST, encoder, distance_timeseries, N_NEIGHBORS)
+    ri = ev.evaluate_clustering_ri(X_TRAIN, X_TEST, encoder, clustering, N_CLUSTERS)
     print("{}, reconstruction: {:.3f}, distance mse: {:.3f}, distance mae: {:.3f}, common nn: {:.3f}, rand index: {:.3f}".format(DATA, recon, dist[0], dist[1], common, ri))
 
 
