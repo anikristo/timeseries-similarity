@@ -1,12 +1,14 @@
 import tensorflow as tf
+from kshape.core import _sbd
+
 
 class Encoder(tf.keras.Model):
 
     def __init__(self, input_shape, code_size, filters, kernel_sizes):
         super(Encoder, self).__init__()
         assert len(filters) == len(kernel_sizes)
-        assert len(input_shape) == 2 # (x, y), x = # of samples, y = # of vars
-        #self.input_shape = input_shape
+        assert len(input_shape) == 2  # (x, y), x = # of samples, y = # of vars
+        # self.input_shape = input_shape
         self.code_size = code_size
 
         self.convs = []
@@ -34,11 +36,11 @@ class Encoder(tf.keras.Model):
             x = conv(x)
             x = norm(x, training=training)
         assert x.shape[1:] == self.last_kernel_shape
-        #print(x.shape)
         x = self.flatten(x)
 
         x = self.out(x)
         return x
+
 
 class Decoder(tf.keras.Model):
 
@@ -46,7 +48,8 @@ class Decoder(tf.keras.Model):
         super(Decoder, self).__init__()
 
         assert len(last_kernel_shape) == 2
-        assert len(output_shape) == 2 # (x, y) x = # of samples, y = samples n variables
+        # (x, y) x = # of samples, y = samples n variables
+        assert len(output_shape) == 2
 
         self.code_size = code_size
         self.last_kernel_shape = last_kernel_shape
@@ -72,50 +75,68 @@ class Decoder(tf.keras.Model):
         for conv, norm in zip(self.convs, self.norms):
             x = norm(x, training=training)
             x = conv(x)
-        assert self.expected_output_shape == x.shape[1:]
+        # assert self.expected_output_shape == x.shape[1:] # TODO fix assertion
         return x
 
-_optimizer = tf.keras.optimizers.Nadam(learning_rate=0.00015)
-_mse_loss = tf.keras.losses.MeanSquaredError()
 
 class AutoEncoder:
     def __init__(self, **kwargs):
 
-        input_shape     = kwargs["input_shape"]
-        code_size       = kwargs["code_size"]
-        filters         = kwargs["filters"]
-        kernel_sizes    = kwargs["kernel_sizes"]
+        input_shape = kwargs["input_shape"]
+        code_size = kwargs["code_size"]
+        filters = kwargs["filters"]
+        kernel_sizes = kwargs["kernel_sizes"]
 
-        if "loss" in kwargs:
-            loss        = kwargs["loss"]
+        if "reconstruction_loss" in kwargs:
+            self.reconstruction_loss = kwargs["reconstruction_loss"]
         else:
-            loss        = _mse_loss
+            self.reconstruction_loss = tf.keras.losses.MeanSquaredError()
+
+        if "codes_loss" in kwargs:
+            self.codes_loss = kwargs["codes_loss"]
+        else:
+            self.codes_loss = tf.keras.losses.MeanSquaredError()
+
+        if "input_distance_metric" in kwargs:
+            self.input_distance_metric = kwargs["input_distance_metric"]
+        else:
+            self.input_distance_metric = tf.keras.losses.MeanSquaredError()
+            # self.input_distance_metric = _sbd  # TODO uncomment
 
         if "optimizer" in kwargs:
-            optimizer   = kwargs["optimizer"]
+            self.optimizer = kwargs["optimizer"]
         else:
-            optimizer   = _optimizer
+            self.optimizer = tf.keras.optimizers.Nadam(learning_rate=0.00015)
 
-        self.encode = Encoder(input_shape, code_size, filters, kernel_sizes)
+        self.first_encoder = Encoder(
+            input_shape, code_size, filters, kernel_sizes)
+        self.second_encoder = Encoder(
+            input_shape, code_size, filters, kernel_sizes)
 
         decoder_filters = list(filters[:len(filters)-1])
         decoder_filters.append(input_shape[1])
-        last_kernel_shape = self.encode.last_kernel_shape
+        last_kernel_shape = self.first_encoder.last_kernel_shape
 
-        self.decode = Decoder(code_size, last_kernel_shape, input_shape, decoder_filters,
-                kernel_sizes)
+        self.decoder = Decoder(code_size, last_kernel_shape, input_shape, decoder_filters,
+                               kernel_sizes)
 
-        self.loss = loss
-        self.optimizer = optimizer
+# TODO ALT: pre-calc pairwise distances (SBD)
+# TODO Try with and without precalculated distances, check accuracy and performance
+# TODO Try trianing encoder and decoder separately (two losses)
+# TODO Try other types of convolutions?
+# TODO Use SBD for reconstruction loss
 
 @tf.function
-def train_step(input, auto_encoder, optimizer=_optimizer, loss = _mse_loss):
+def train_step(first_input, second_input, model, alpha=0.5):
     with tf.GradientTape() as tape:
-        codes = auto_encoder.encode(input, training=True)
-        decodes = auto_encoder.decode(codes, training=True)
-        loss = loss(input, decodes)
-        trainables = auto_encoder.encode.trainable_variables + auto_encoder.decode.trainable_variables
-    gradients = tape.gradient(loss, trainables)
-    optimizer.apply_gradients(zip(gradients, trainables))
-    return loss
-
+        first_code = tf.cast(model.first_encoder(first_input, training=True), dtype=tf.float64)
+        second_code = tf.cast(model.second_encoder(second_input, training=True), dtype=tf.float64)
+        decodes = tf.cast(model.decoder(first_code, training=True), dtype=tf.float64)
+        loss_value = (1-alpha) * model.reconstruction_loss(first_input, decodes) + alpha * abs(
+            model.codes_loss(first_code, second_code) - model.input_distance_metric(first_input, second_input))
+        trainables = model.first_encoder.trainable_variables + \
+            model.second_encoder.trainable_variables + \
+            model.decoder.trainable_variables
+    gradients = tape.gradient(loss_value, trainables)
+    model.optimizer.apply_gradients(zip(gradients, trainables))
+    return loss_value
